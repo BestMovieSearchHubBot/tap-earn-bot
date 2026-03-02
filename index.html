@@ -782,7 +782,7 @@ const database = firebase.database();
 
 <script>
 // ============================================
-// MAIN APPLICATION CODE - ENERGY PERFECT FIX
+// MAIN APPLICATION CODE - PERFECT BALANCE FIX
 // ============================================
 
 let tg = window.Telegram.WebApp;
@@ -796,7 +796,10 @@ const BOT_TOKEN = "8652596915:AAGgK4nWqRM-YB3864rCII_T0uHxQbz_RKU";
 const ADMIN_ID = "6252869088";
 
 // --- SYNC VARIABLES ---
-let balance = 0, energy = 0, totalRefs = 0, lastClaim = 0;
+let balance = 0;
+let dbBalance = 0; // Track database balance separately
+let energy = 0;
+let totalRefs = 0, lastClaim = 0;
 let silverExpiry = 0, lastEnergyClaim = 0;
 let tapCounter = parseInt(localStorage.getItem('pendingTaps')) || 0;
 const SAVE_THRESHOLD = 500;
@@ -810,7 +813,7 @@ let lastTelegramQuestTime = localStorage.getItem('lastTelegramQuest_' + userId) 
 const QUEST_COOLDOWN = 2 * 60 * 60 * 1000; // 2 hours
 
 // ============================================
-// LOAD DATA - PERFECT ENERGY CALCULATION
+// LOAD DATA - FIXED BALANCE CALCULATION
 // ============================================
 async function loadData() {
     try {
@@ -819,8 +822,8 @@ async function loadData() {
         let data = await res.json();
         
         if (data) {
-            // Database se values
-            let dbBalance = data.balance || 0;
+            // Store database balance separately
+            dbBalance = data.balance || 0;
             let dbEnergy = typeof data.energy === 'number' ? data.energy : 1000;
             
             totalRefs = data.totalRefs || 0;
@@ -828,31 +831,27 @@ async function loadData() {
             lastEnergyClaim = data.lastEnergyClaim || 0;
             silverExpiry = data.silverExpiry || 0;
 
-            // Pending calculations - IMPORTANT FIX
+            // Pending calculations
             let pendingBalance = parseFloat(localStorage.getItem('pendingBalance')) || 0;
-            
-            // ENERGY FIX: Pending loss ko subtract karo
             let pendingLoss = parseInt(localStorage.getItem('pendingEnergyLoss')) || 0;
             
-            // Calculate energy: Database energy minus pending loss
-            let calculatedEnergy = dbEnergy - pendingLoss;
-            
-            // Ensure energy is not negative
-            energy = Math.max(0, calculatedEnergy);
-            
-            // Balance: Database balance plus pending
+            // FINAL FIX: Balance = Database Balance + Pending Balance ONLY
             balance = dbBalance + pendingBalance;
+            
+            // Energy calculation
+            let calculatedEnergy = dbEnergy - pendingLoss;
+            energy = Math.max(0, calculatedEnergy);
 
-            console.log(`Energy Calc: DB=${dbEnergy}, PendingLoss=${pendingLoss}, Final=${energy}`);
+            console.log(`LOAD: DB=${dbBalance}, Pending=${pendingBalance}, Display=${balance}`);
 
-            // Silver passive earnings
+            // Silver passive earnings (apply to display balance only)
             const now = Date.now();
             if (silverExpiry && now < silverExpiry) {
                 let lastTime = data.lastSaveTime || now;
                 let secondsPassed = Math.floor((now - lastTime) / 1000);
+                // Add to display balance only, not to dbBalance
                 balance += (secondsPassed / 3600) * 5;
                 
-                // Energy regeneration during silver
                 let regenEnergy = Math.floor(secondsPassed / 10);
                 energy = Math.min(1000, energy + regenEnergy);
             }
@@ -865,6 +864,7 @@ async function loadData() {
             updateHistoryUI();
         } else {
             // New user
+            dbBalance = 0;
             balance = 0;
             energy = 1000;
             await saveData();
@@ -877,16 +877,20 @@ async function loadData() {
 }
 
 // ============================================
-// SAVE DATA - PROPER ENERGY SAVE
+// SAVE DATA - FIXED
 // ============================================
 async function saveData() {
-    // Calculate current database energy (energy + pendingLoss)
+    // Calculate current database balance (balance - pending)
+    let pendingBalance = parseFloat(localStorage.getItem('pendingBalance')) || 0;
+    let newDbBalance = balance - pendingBalance;
+    
+    // Calculate database energy (energy + pendingLoss)
     let pendingLoss = parseInt(localStorage.getItem('pendingEnergyLoss')) || 0;
     let dbEnergy = energy + pendingLoss;
     
     const dataToSave = { 
-        balance: parseFloat(balance.toFixed(2)), 
-        energy: Math.floor(dbEnergy),  // Save database energy (includes pending)
+        balance: parseFloat(newDbBalance.toFixed(2)), 
+        energy: Math.floor(dbEnergy),
         totalRefs, 
         lastClaim, 
         lastEnergyClaim,
@@ -899,12 +903,15 @@ async function saveData() {
             method: 'PATCH',
             body: JSON.stringify(dataToSave)
         });
-        console.log("Database Synced - Energy Saved:", dbEnergy, "Current Display:", energy);
+        console.log(`SAVE: Display=${balance}, Pending=${pendingBalance}, DB Saved=${newDbBalance}`);
+        
+        // Update dbBalance after successful save
+        dbBalance = newDbBalance;
     } catch (e) { console.error("Save Error:", e); }
 }
 
 // ============================================
-// HANDLE TAP - PERFECT ENERGY TRACKING
+// HANDLE TAP - FIXED
 // ============================================
 function handleTap(e) {
     let isSilver = (silverExpiry && Date.now() < silverExpiry);
@@ -914,7 +921,7 @@ function handleTap(e) {
         return showAlert("Energy 0! Please invite friend.");
     }
     
-    // Update local variables
+    // Update display balance
     balance += tapPower; 
     energy -= 1;
     tapCounter++;
@@ -932,8 +939,7 @@ function handleTap(e) {
     // Auto-save after threshold
     if (tapCounter >= SAVE_THRESHOLD) {
         saveData();
-        // Don't reset pending here - let them accumulate
-        // Only reset counter
+        // Don't reset pending, just counter
         tapCounter = 0;
         localStorage.setItem('pendingTaps', 0);
     }
@@ -948,6 +954,256 @@ function handleTap(e) {
     plus.style.top = y + 'px';
     document.body.appendChild(plus);
     setTimeout(() => plus.remove(), 800);
+}
+
+// ============================================
+// CLAIM DAILY - FIXED DOUBLE ADD
+// ============================================
+async function claimDaily() {
+    const now = Date.now();
+    if (now - lastClaim < 24 * 60 * 60 * 1000) return tg.showAlert("Wait for 24 hours!");
+    
+    document.getElementById("loadingOverlay").style.display = "flex";
+    
+    setTimeout(async () => {
+        document.getElementById("loadingOverlay").style.display = "none";
+        
+        // Add to display balance only
+        balance += 5; 
+        lastClaim = now;
+        
+        // Update pending balance
+        let currentPending = parseFloat(localStorage.getItem('pendingBalance')) || 0;
+        localStorage.setItem('pendingBalance', (currentPending + 5).toFixed(2));
+        
+        document.getElementById('pop-amount').innerText = "5.00";
+        document.getElementById("claimOverlay").style.display = "flex";
+        
+        updateUI(); 
+        await saveData(); 
+        checkDailyStatus();
+    }, 2000);
+}
+
+// ============================================
+// CLAIM ENERGY - FIXED
+// ============================================
+async function claimEnergy() {
+    const now = Date.now();
+    if (now - lastEnergyClaim < 24 * 60 * 60 * 1000) return tg.showAlert("Wait for 24 hours!");
+    
+    document.getElementById("loadingOverlay2").style.display = "flex";
+    
+    setTimeout(async () => {
+        document.getElementById("loadingOverlay2").style.display = "none";
+        
+        // Add energy directly
+        energy += 100; 
+        lastEnergyClaim = now;
+        
+        document.getElementById('pop-amount').innerText = "100";
+        document.getElementById("energyOverlay").style.display = "flex";
+        
+        updateUI(); 
+        await saveData(); 
+        checkEnergyStatus();
+    }, 2000);
+}
+
+// ============================================
+// CLAIM SILVER - FIXED
+// ============================================
+async function claimSilver() {
+    if (balance < 1000) return tg.showAlert("Insufficient Balance!");
+    
+    document.getElementById("loadingOverlay3").style.display = "flex";
+    
+    setTimeout(async () => {
+        document.getElementById("loadingOverlay3").style.display = "none";
+        
+        // Subtract from display balance
+        balance -= 1000; 
+        
+        // Update pending balance (negative)
+        let currentPending = parseFloat(localStorage.getItem('pendingBalance')) || 0;
+        localStorage.setItem('pendingBalance', (currentPending - 1000).toFixed(2));
+        
+        silverExpiry = Date.now() + (24 * 60 * 60 * 1000); 
+        
+        document.getElementById("silverOverlay").style.display = "flex";
+        
+        updateUI(); 
+        await saveData(); 
+        checkSilverStatus();
+    }, 2000); 
+}
+
+// ============================================
+// MONETAG - FIXED
+// ============================================
+let lastAdClaimTime = localStorage.getItem('lastAdClaim') || 0;
+
+function claimInterstitial() {
+    const now = Date.now();
+    const waitTime = 2 * 60 * 60 * 1000;
+    
+    if (now - lastAdClaimTime < waitTime) {
+        const remainingMin = Math.ceil((waitTime - (now - lastAdClaimTime)) / (60 * 1000));
+        return tg.showAlert(`Please wait ${remainingMin} minutes!`);
+    }
+    
+    document.getElementById('loadingOverlay4').style.display = 'flex';
+    
+    show_10661424().then(() => {
+        document.getElementById('loadingOverlay4').style.display = 'none';
+        
+        // Add to display balance
+        balance += 10; 
+        
+        // Update pending
+        let currentPending = parseFloat(localStorage.getItem('pendingBalance')) || 0;
+        localStorage.setItem('pendingBalance', (currentPending + 10).toFixed(2));
+        
+        lastAdClaimTime = Date.now();
+        localStorage.setItem('lastAdClaim', lastAdClaimTime);
+        
+        updateUI(); 
+        saveData();
+        checkAdButtonStatus();
+        
+        document.getElementById('Interstitial-pop-amount').innerText = "10";
+        document.getElementById('InterstitialOverlay').style.display = 'flex';
+    }).catch((err) => {
+        document.getElementById('loadingOverlay4').style.display = 'none';
+        tg.showAlert("Ad not ready.");
+    });
+}
+
+// ============================================
+// TELEGRAM QUEST - FIXED
+// ============================================
+function startTelegramQuest() {
+    const btn = document.getElementById('telegramQuestBtn');
+    if (btn.disabled) return;
+    
+    if (questInProgress) return;
+    questInProgress = true;
+    
+    document.getElementById('loadingOverlay4').style.display = 'flex';
+    
+    setTimeout(() => {
+        document.getElementById('loadingOverlay4').style.display = 'none';
+        
+        document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
+        document.querySelector('.navbar').style.display = 'none';
+        
+        document.getElementById('telegramQuestPage').style.display = 'flex';
+        
+        startTelegramQuestTimer();
+    }, 2500);
+}
+
+function startTelegramQuestTimer() {
+    tgQuestSeconds = 30;
+    const timerEl = document.getElementById('tgTimer');
+    const progressBar = document.getElementById('tgProgressBar');
+    const goBtn = document.getElementById('tgGoBtn');
+    const claimBtn = document.getElementById('tgClaimBtn');
+    
+    goBtn.disabled = true;
+    progressBar.style.width = '0%';
+    
+    const promotionalLink = "https://t.me/tapfortunebot";
+    
+    claimBtn.onclick = () => {
+        if (tg) {
+            tg.openLink(promotionalLink);
+        } else {
+            window.open(promotionalLink, '_blank');
+        }
+    };
+    
+    if (tgQuestTimer) clearInterval(tgQuestTimer);
+    
+    tgQuestTimer = setInterval(() => {
+        tgQuestSeconds--;
+        
+        let progress = ((30 - tgQuestSeconds) / 30) * 100;
+        progressBar.style.width = progress + "%";
+        timerEl.innerText = `00:${tgQuestSeconds < 10 ? '0' + tgQuestSeconds : tgQuestSeconds}`;
+        
+        if (tgQuestSeconds <= 0) {
+            clearInterval(tgQuestTimer);
+            timerEl.innerText = "DONE!";
+            goBtn.disabled = false;
+            
+            if (tg) {
+                tg.HapticFeedback.notificationOccurred('success');
+            }
+        }
+    }, 1000);
+    
+    goBtn.onclick = async function() {
+        if (goBtn.disabled) return;
+        goBtn.disabled = true;
+        
+        document.getElementById('telegramQuestPage').style.display = 'none';
+        document.getElementById('loadingOverlay4').style.display = 'flex';
+        
+        try {
+            // Add to display balance
+            balance += tgQuestReward;
+            
+            // Update pending
+            let currentPending = parseFloat(localStorage.getItem('pendingBalance')) || 0;
+            localStorage.setItem('pendingBalance', (currentPending + tgQuestReward).toFixed(2));
+            
+            // Set 2 hour lock
+            const now = Date.now();
+            localStorage.setItem('lastTelegramQuest_' + userId, now.toString());
+            lastTelegramQuestTime = now;
+            
+            await saveData();
+            
+            document.querySelectorAll('.page').forEach(p => p.style.display = '');
+            document.querySelector('.navbar').style.display = 'flex';
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById('tasks').classList.add('active');
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.querySelectorAll('.nav-item')[1].classList.add('active');
+            
+            document.getElementById('loadingOverlay4').style.display = 'none';
+            
+            document.getElementById('Interstitial-pop-amount').innerText = tgQuestReward.toString();
+            document.getElementById('InterstitialOverlay').style.display = 'flex';
+            
+            updateUI();
+            checkTelegramQuestStatus();
+            
+        } catch (error) {
+            console.error("Error:", error);
+            document.getElementById('loadingOverlay4').style.display = 'none';
+        }
+        
+        questInProgress = false;
+    };
+}
+
+function closeTelegramQuest() {
+    if (!questInProgress) return;
+    
+    if (tgQuestTimer) clearInterval(tgQuestTimer);
+    
+    document.getElementById('telegramQuestPage').style.display = 'none';
+    
+    document.querySelectorAll('.page').forEach(p => p.style.display = '');
+    document.querySelector('.navbar').style.display = 'flex';
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById('tasks').classList.add('active');
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.nav-item')[1].classList.add('active');
+    
+    questInProgress = false;
 }
 
 // ============================================
@@ -1062,195 +1318,7 @@ function closeInterstitialPopup() {
 }
 
 // ============================================
-// EXISTING QUESTS
-// ============================================
-async function claimDaily() {
-    const now = Date.now();
-    if (now - lastClaim < 24 * 60 * 60 * 1000) return tg.showAlert("Wait for 24 hours!");
-    document.getElementById("loadingOverlay").style.display = "flex";
-    setTimeout(async () => {
-        document.getElementById("loadingOverlay").style.display = "none";
-        balance += 5; lastClaim = now;
-        document.getElementById('pop-amount').innerText = "5.00";
-        document.getElementById("claimOverlay").style.display = "flex";
-        updateUI(); await saveData(); checkDailyStatus();
-    }, 2000);
-}
-
-async function claimEnergy() {
-    const now = Date.now();
-    if (now - lastEnergyClaim < 24 * 60 * 60 * 1000) return tg.showAlert("Wait for 24 hours!");
-    document.getElementById("loadingOverlay2").style.display = "flex";
-    setTimeout(async () => {
-        document.getElementById("loadingOverlay2").style.display = "none";
-        energy += 100; lastEnergyClaim = now;
-        document.getElementById('pop-amount').innerText = "100";
-        document.getElementById("energyOverlay").style.display = "flex";
-        updateUI(); await saveData(); checkEnergyStatus();
-    }, 2000);
-}
-
-async function claimSilver() {
-    if (balance < 1000) return tg.showAlert("Insufficient Balance!");
-    const loader = document.getElementById("loadingOverlay3");
-    if(loader) loader.style.display = "flex";
-    setTimeout(async () => {
-        if(loader) loader.style.display = "none";
-        balance -= 1000; silverExpiry = Date.now() + (24 * 60 * 60 * 1000); 
-        document.getElementById("silverOverlay").style.display = "flex";
-        updateUI(); await saveData(); checkSilverStatus();
-    }, 2000); 
-}
-
-// ============================================
-// MONETAG INTEGRATION
-// ============================================
-let lastAdClaimTime = localStorage.getItem('lastAdClaim') || 0;
-
-function claimInterstitial() {
-    const now = Date.now();
-    const waitTime = 2 * 60 * 60 * 1000;
-    if (now - lastAdClaimTime < waitTime) {
-        const remainingMin = Math.ceil((waitTime - (now - lastAdClaimTime)) / (60 * 1000));
-        return tg.showAlert(`Please wait ${remainingMin} minutes!`);
-    }
-    document.getElementById('loadingOverlay4').style.display = 'flex';
-    show_10661424().then(() => {
-        document.getElementById('loadingOverlay4').style.display = 'none';
-        balance += 10; updateUI(); saveData();
-        lastAdClaimTime = Date.now();
-        localStorage.setItem('lastAdClaim', lastAdClaimTime);
-        checkAdButtonStatus();
-        document.getElementById('Interstitial-pop-amount').innerText = "10";
-        document.getElementById('InterstitialOverlay').style.display = 'flex';
-    }).catch((err) => {
-        document.getElementById('loadingOverlay4').style.display = 'none';
-        tg.showAlert("Ad not ready.");
-    });
-}
-
-// ============================================
-// TELEGRAM QUEST
-// ============================================
-function startTelegramQuest() {
-    const btn = document.getElementById('telegramQuestBtn');
-    if (btn.disabled) return;
-    
-    if (questInProgress) return;
-    questInProgress = true;
-    
-    document.getElementById('loadingOverlay4').style.display = 'flex';
-    
-    setTimeout(() => {
-        document.getElementById('loadingOverlay4').style.display = 'none';
-        
-        document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
-        document.querySelector('.navbar').style.display = 'none';
-        
-        document.getElementById('telegramQuestPage').style.display = 'flex';
-        
-        startTelegramQuestTimer();
-    }, 2500);
-}
-
-function startTelegramQuestTimer() {
-    tgQuestSeconds = 30;
-    const timerEl = document.getElementById('tgTimer');
-    const progressBar = document.getElementById('tgProgressBar');
-    const goBtn = document.getElementById('tgGoBtn');
-    const claimBtn = document.getElementById('tgClaimBtn');
-    
-    goBtn.disabled = true;
-    progressBar.style.width = '0%';
-    
-    const promotionalLink = "https://t.me/tapfortunebot";
-    
-    claimBtn.onclick = () => {
-        if (tg) {
-            tg.openLink(promotionalLink);
-        } else {
-            window.open(promotionalLink, '_blank');
-        }
-    };
-    
-    if (tgQuestTimer) clearInterval(tgQuestTimer);
-    
-    tgQuestTimer = setInterval(() => {
-        tgQuestSeconds--;
-        
-        let progress = ((30 - tgQuestSeconds) / 30) * 100;
-        progressBar.style.width = progress + "%";
-        timerEl.innerText = `00:${tgQuestSeconds < 10 ? '0' + tgQuestSeconds : tgQuestSeconds}`;
-        
-        if (tgQuestSeconds <= 0) {
-            clearInterval(tgQuestTimer);
-            timerEl.innerText = "DONE!";
-            goBtn.disabled = false;
-            
-            if (tg) {
-                tg.HapticFeedback.notificationOccurred('success');
-            }
-        }
-    }, 1000);
-    
-    goBtn.onclick = async function() {
-        if (goBtn.disabled) return;
-        goBtn.disabled = true;
-        
-        document.getElementById('telegramQuestPage').style.display = 'none';
-        document.getElementById('loadingOverlay4').style.display = 'flex';
-        
-        try {
-            balance += tgQuestReward;
-            await saveData();
-            
-            const now = Date.now();
-            localStorage.setItem('lastTelegramQuest_' + userId, now.toString());
-            lastTelegramQuestTime = now;
-            
-            document.querySelectorAll('.page').forEach(p => p.style.display = '');
-            document.querySelector('.navbar').style.display = 'flex';
-            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-            document.getElementById('tasks').classList.add('active');
-            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-            document.querySelectorAll('.nav-item')[1].classList.add('active');
-            
-            document.getElementById('loadingOverlay4').style.display = 'none';
-            
-            document.getElementById('Interstitial-pop-amount').innerText = tgQuestReward.toString();
-            document.getElementById('InterstitialOverlay').style.display = 'flex';
-            
-            updateUI();
-            checkTelegramQuestStatus();
-            
-        } catch (error) {
-            console.error("Error:", error);
-            document.getElementById('loadingOverlay4').style.display = 'none';
-        }
-        
-        questInProgress = false;
-    };
-}
-
-function closeTelegramQuest() {
-    if (!questInProgress) return;
-    
-    if (tgQuestTimer) clearInterval(tgQuestTimer);
-    
-    document.getElementById('telegramQuestPage').style.display = 'none';
-    
-    document.querySelectorAll('.page').forEach(p => p.style.display = '');
-    document.querySelector('.navbar').style.display = 'flex';
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.getElementById('tasks').classList.add('active');
-    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-    document.querySelectorAll('.nav-item')[1].classList.add('active');
-    
-    questInProgress = false;
-}
-
-// ============================================
-// WITHDRAWAL - FIXED ENERGY
+// WITHDRAWAL - FIXED
 // ============================================
 async function withdraw() {
     let upi = document.getElementById('upiId').value;
@@ -1273,17 +1341,15 @@ async function withdraw() {
         let msg = `💰 *New Withdrawal*\n👤: ${userName}\n💵: ${amount.toFixed(2)}\n🏦: \`${upi}\``;
         await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage?chat_id=${ADMIN_ID}&text=${encodeURIComponent(msg)}&parse_mode=Markdown`);
 
-        // Reset only balance, NOT energy
+        // Reset display balance to 0
         balance = 0; 
         
-        // Reset pending balance only
-        localStorage.setItem('pendingBalance', 0);
+        // Reset pending balance to 0
+        localStorage.setItem('pendingBalance', '0');
         
-        // IMPORTANT: Don't reset pendingEnergyLoss
-        // Keep energy as is
-        
+        // Keep energy and pending loss as is
         tapCounter = 0;
-        localStorage.setItem('pendingTaps', 0);
+        localStorage.setItem('pendingTaps', '0');
         
         await saveData();
         updateUI(); 
