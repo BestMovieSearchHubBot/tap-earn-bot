@@ -782,7 +782,7 @@ const database = firebase.database();
 
 <script>
 // ============================================
-// MAIN APPLICATION CODE - WITH 2 HOUR LOCK
+// MAIN APPLICATION CODE - ENERGY FIXED
 // ============================================
 
 let tg = window.Telegram.WebApp;
@@ -810,7 +810,7 @@ let lastTelegramQuestTime = localStorage.getItem('lastTelegramQuest_' + userId) 
 const QUEST_COOLDOWN = 2 * 60 * 60 * 1000; // 2 hours
 
 // ============================================
-// LOAD DATA
+// LOAD DATA - FIXED ENERGY ISSUE
 // ============================================
 async function loadData() {
     try {
@@ -819,7 +819,9 @@ async function loadData() {
         
         if (data) {
             let dbBalance = data.balance || 0;
-            let dbEnergy = data.energy || 1000;
+            // FIX: Ensure energy is always a valid number and not reset to 1000
+            let dbEnergy = typeof data.energy === 'number' ? data.energy : 1000;
+            
             totalRefs = data.totalRefs || 0;
             lastClaim = data.lastClaim || 0;
             lastEnergyClaim = data.lastEnergyClaim || 0;
@@ -829,7 +831,12 @@ async function loadData() {
             let pendingLoss = parseInt(localStorage.getItem('pendingEnergyLoss')) || 0;
 
             balance = dbBalance + pendingBalance;
+            
+            // FIX: Proper energy calculation
             energy = Math.max(0, dbEnergy - pendingLoss);
+            
+            // Ensure energy doesn't exceed 1000
+            if (energy > 1000) energy = 1000;
 
             const now = Date.now();
             if (silverExpiry && now < silverExpiry) {
@@ -845,20 +852,27 @@ async function loadData() {
             checkSilverStatus();
             checkTelegramQuestStatus();
             updateHistoryUI();
+        } else {
+            // New user - initialize with default values
+            balance = 0;
+            energy = 1000;
+            await saveData();
+            updateUI();
         }
     } catch (e) { 
         console.error("Firebase Error:", e);
+        // Don't reset energy on error - keep existing values
         updateUI(); 
     }
 }
 
 // ============================================
-// SAVE DATA
+// SAVE DATA - FIXED ENERGY SAVE
 // ============================================
 async function saveData() {
     const dataToSave = { 
         balance: parseFloat(balance.toFixed(2)), 
-        energy: Math.floor(energy), 
+        energy: Math.floor(energy),  // Save current energy value
         totalRefs, 
         lastClaim, 
         lastEnergyClaim,
@@ -871,7 +885,7 @@ async function saveData() {
             method: 'PATCH',
             body: JSON.stringify(dataToSave)
         });
-        console.log("Database Synced @ 500 Taps");
+        console.log("Database Synced - Energy:", energy);
     } catch (e) { console.error("Save Error:", e); }
 }
 
@@ -954,6 +968,9 @@ function checkDailyStatus() {
     if (now - lastClaim < 24 * 60 * 60 * 1000) {
         const btn = document.getElementById('dailyBtn');
         if(btn) { btn.innerText = "Claimed"; btn.disabled = true; }
+    } else {
+        const btn = document.getElementById('dailyBtn');
+        if(btn) { btn.innerText = "Claim"; btn.disabled = false; }
     }
 }
 
@@ -962,6 +979,9 @@ function checkEnergyStatus() {
     if (now - lastEnergyClaim < 24 * 60 * 60 * 1000) {
         const btn = document.getElementById('energyBtn');
         if(btn) { btn.innerText = "Claimed"; btn.disabled = true; }
+    } else {
+        const btn = document.getElementById('energyBtn');
+        if(btn) { btn.innerText = "Claim"; btn.disabled = false; }
     }
 }
 
@@ -992,14 +1012,12 @@ function checkTelegramQuestStatus() {
     lastTelegramQuestTime = localStorage.getItem('lastTelegramQuest_' + userId) || 0;
     
     if (now - lastTelegramQuestTime < QUEST_COOLDOWN) {
-        // Button disable with "Locked" text (no alert)
         if (btn) { 
             btn.disabled = true; 
             btn.innerText = "Locked"; 
             btn.style.opacity = "0.5";
         }
     } else {
-        // Button enable
         if (btn) { 
             btn.disabled = false; 
             btn.innerText = "Start"; 
@@ -1094,31 +1112,25 @@ function claimInterstitial() {
 }
 
 // ============================================
-// TELEGRAM QUEST - 2 HOUR LOCK (NO ALERT)
+// TELEGRAM QUEST - 2 HOUR LOCK
 // ============================================
 function startTelegramQuest() {
-    // Check if button is disabled
     const btn = document.getElementById('telegramQuestBtn');
-    if (btn.disabled) return; // Silently return - no alert
+    if (btn.disabled) return;
     
     if (questInProgress) return;
     questInProgress = true;
     
-    // Show loading
     document.getElementById('loadingOverlay4').style.display = 'flex';
     
-    // 2.5 seconds loading
     setTimeout(() => {
         document.getElementById('loadingOverlay4').style.display = 'none';
         
-        // Hide main app pages
         document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
         document.querySelector('.navbar').style.display = 'none';
         
-        // Show Telegram Quest page
         document.getElementById('telegramQuestPage').style.display = 'flex';
         
-        // Start countdown
         startTelegramQuestTimer();
     }, 2500);
 }
@@ -1171,22 +1183,13 @@ function startTelegramQuestTimer() {
         document.getElementById('loadingOverlay4').style.display = 'flex';
         
         try {
-            // Update balance
             balance += tgQuestReward;
             await saveData();
             
-            // Update Firebase directly
-            await fetch(`${DB_BASE_URL}${userId}.json`, {
-                method: 'PATCH',
-                body: JSON.stringify({ balance: balance })
-            });
-            
-            // Set 2 hour lock in localStorage
             const now = Date.now();
             localStorage.setItem('lastTelegramQuest_' + userId, now.toString());
             lastTelegramQuestTime = now;
             
-            // Show main app - Tasks page
             document.querySelectorAll('.page').forEach(p => p.style.display = '');
             document.querySelector('.navbar').style.display = 'flex';
             document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -1196,7 +1199,6 @@ function startTelegramQuestTimer() {
             
             document.getElementById('loadingOverlay4').style.display = 'none';
             
-            // Show popup
             document.getElementById('Interstitial-pop-amount').innerText = tgQuestReward.toString();
             document.getElementById('InterstitialOverlay').style.display = 'flex';
             
@@ -1230,7 +1232,7 @@ function closeTelegramQuest() {
 }
 
 // ============================================
-// WITHDRAWAL FUNCTIONS
+// WITHDRAWAL FUNCTIONS - FIXED ENERGY RESET
 // ============================================
 async function withdraw() {
     let upi = document.getElementById('upiId').value;
@@ -1253,10 +1255,17 @@ async function withdraw() {
         let msg = `💰 *New Withdrawal*\n👤: ${userName}\n💵: ${amount.toFixed(2)}\n🏦: \`${upi}\``;
         await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage?chat_id=${ADMIN_ID}&text=${encodeURIComponent(msg)}&parse_mode=Markdown`);
 
+        // FIX: Don't reset energy, only reset balance and pending
         balance = 0; 
         localStorage.setItem('pendingBalance', 0);
         localStorage.setItem('pendingEnergyLoss', 0);
-        updateUI(); updateHistoryUI(); saveData();
+        localStorage.setItem('pendingTaps', 0);
+        tapCounter = 0;
+        
+        // Save current energy value
+        await saveData();
+        updateUI(); 
+        updateHistoryUI();
 
         document.getElementById('popAmt').innerText = amount.toFixed(2);
         document.getElementById('overlay').style.display = "block"; 
@@ -1269,8 +1278,15 @@ async function withdraw() {
             colors: ['#f3ba2f', '#ffffff', '#22c55e'],
             zIndex: 20000
         });
-    } catch (e) { showAlert("Request fail!"); }
-    finally { btn.disabled = false; btn.style.opacity = "1"; btn.innerHTML = originalBtnText; }
+    } catch (e) { 
+        console.error("Withdrawal error:", e);
+        showAlert("Request fail!"); 
+    }
+    finally { 
+        btn.disabled = false; 
+        btn.style.opacity = "1"; 
+        btn.innerHTML = originalBtnText; 
+    }
 }
 
 async function updateHistoryUI() {
@@ -1353,18 +1369,7 @@ setInterval(async () => {
         if (energy < 1000) energy += 0.1; 
         updateUI();
     }
-    if (Math.floor(now / 1000) % 10 === 0) {
-        try {
-            let res = await fetch(`${DB_BASE_URL}${userId}.json`);
-            let data = await res.json();
-            if (data) {
-                totalRefs = data.totalRefs || 0;
-                if (data.balance > balance) balance = data.balance;
-                updateUI();
-            }
-        } catch (e) {}
-    }
-}, 1000); 
+}, 1000);
 
 </script>
 </body>
